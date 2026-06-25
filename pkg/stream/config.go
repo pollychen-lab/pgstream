@@ -201,6 +201,115 @@ func (c *Config) RequiredTables() []string {
 			requiredTables = append(requiredTables, c.Listener.Postgres.Snapshot.Adapter.Tables...)
 		}
 	}
-	// TODO: add included tables for the replication case as well
+	// Replication-side filtering is exposed via ReplicationTableSelection,
+	// since include/exclude isn't a flat "required" list.
 	return requiredTables
+}
+
+// TableSelection captures the include/exclude filter pgstream applies to the
+// WAL stream. Empty Include means "every user table is in scope"; Exclude
+// names tables to skip. Include and Exclude are mutually exclusive (validated
+// at filter construction).
+type TableSelection struct {
+	Include []string
+	Exclude []string
+}
+
+// IsUnfiltered reports whether the selection imposes no constraint, i.e. every
+// user table the listener sees is in scope.
+func (s TableSelection) IsUnfiltered() bool {
+	return len(s.Include) == 0 && len(s.Exclude) == 0
+}
+
+// SnapshotTableSelection returns the table filter that will be applied to the
+// snapshot path, sourced from the snapshot adapter's include/exclude lists.
+// If no snapshot is configured every table the snapshot worker sees is in
+// scope.
+func (c *Config) SnapshotTableSelection() TableSelection {
+	if c.Listener.Postgres == nil || c.Listener.Postgres.Snapshot == nil {
+		return TableSelection{}
+	}
+	return TableSelection{
+		Include: c.Listener.Postgres.Snapshot.Adapter.Tables,
+		Exclude: c.Listener.Postgres.Snapshot.Adapter.ExcludedTables,
+	}
+}
+
+// ReplicationTableSelection returns the table filter that will be applied to
+// WAL events at replication time. Callers (e.g. preflight checks) can use it
+// to know which tables to inspect on the source. The selection mirrors the
+// filter processor's configuration; if no filter is configured every table the
+// listener sees is in scope.
+func (c *Config) ReplicationTableSelection() TableSelection {
+	if c.Processor.Filter == nil {
+		return TableSelection{}
+	}
+	return TableSelection{
+		Include: c.Processor.Filter.IncludeTables,
+		Exclude: c.Processor.Filter.ExcludeTables,
+	}
+}
+
+// AccessTableSelection returns the table set the source role needs SELECT on,
+// computed as the union of SnapshotTableSelection and ReplicationTableSelection
+// — a table is in access scope if either path will read from it.
+//
+// Source-config rules: each underlying selection has Include XOR Exclude
+// (mutually exclusive at config time), so the combinations are:
+//   - either side unfiltered → access is unfiltered
+//   - both Include-only       → access Include = union of the two lists
+//   - both Exclude-only       → access Exclude = intersection (a table is only
+//     excluded when both paths exclude it)
+//   - mixed (one Include, one Exclude) → fall back to unfiltered. The exact
+//     union can't be represented with one Include-XOR-Exclude TableSelection
+//     without introducing a richer predicate; over-permissive is the safe
+//     default since it can only produce extra (not missing) findings.
+func (c *Config) AccessTableSelection() TableSelection {
+	snap := c.SnapshotTableSelection()
+	rep := c.ReplicationTableSelection()
+
+	if snap.IsUnfiltered() || rep.IsUnfiltered() {
+		return TableSelection{}
+	}
+
+	switch {
+	case len(snap.Include) > 0 && len(rep.Include) > 0:
+		return TableSelection{Include: dedupUnion(snap.Include, rep.Include)}
+	case len(snap.Exclude) > 0 && len(rep.Exclude) > 0:
+		return TableSelection{Exclude: intersection(snap.Exclude, rep.Exclude)}
+	default:
+		return TableSelection{}
+	}
+}
+
+func dedupUnion(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	for _, s := range a {
+		seen[s] = struct{}{}
+	}
+	for _, s := range b {
+		seen[s] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out
+}
+
+func intersection(a, b []string) []string {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+	aSet := make(map[string]struct{}, len(a))
+	for _, s := range a {
+		aSet[s] = struct{}{}
+	}
+	var out []string
+	for _, s := range b {
+		if _, ok := aSet[s]; ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }

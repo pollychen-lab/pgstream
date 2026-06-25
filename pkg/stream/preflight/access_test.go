@@ -14,6 +14,7 @@ import (
 	"github.com/xataio/pgstream/pkg/stream"
 	"github.com/xataio/pgstream/pkg/wal/listener/snapshot/adapter"
 	snapshotbuilder "github.com/xataio/pgstream/pkg/wal/listener/snapshot/builder"
+	"github.com/xataio/pgstream/pkg/wal/processor/filter"
 )
 
 func TestSourceTableSelectPrivilegesCheck_Run_AllTablesHaveSelect(t *testing.T) {
@@ -154,8 +155,10 @@ func TestSourceTableSelectPrivilegesCheck_Run_FiltersTablesByScope(t *testing.T)
 	t.Parallel()
 
 	check := &SourceTableSelectPrivilegesCheck{
-		Tables:         []string{"public.*"},
-		ExcludedTables: []string{"public.audit_log"},
+		Selection: stream.TableSelection{
+			Include: []string{"public.*"},
+			Exclude: []string{"public.audit_log"},
+		},
 		Source: sourceWithRows(t, []sourceTableSelectPrivilegeRow{
 			{Role: "pgstream_user", Schema: "billing", Table: "invoices", HasSelect: false},
 			{Role: "pgstream_user", Schema: "public", Table: "audit_log", HasSelect: false},
@@ -174,7 +177,7 @@ func TestSourceTableSelectPrivilegesCheck_Run_InvalidTableSelection(t *testing.T
 	t.Parallel()
 
 	check := &SourceTableSelectPrivilegesCheck{
-		Tables: []string{"too.many.parts"},
+		Selection: stream.TableSelection{Include: []string{"too.many.parts"}},
 		Source: func(context.Context) (postgres.Querier, error) {
 			t.Fatal("Source should not be called when table selection is invalid")
 			return nil, nil
@@ -192,12 +195,6 @@ func TestSourceTableSelectPrivilegesCheck_Name(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(t, "source_table_select_privileges", (&SourceTableSelectPrivilegesCheck{}).Name())
-}
-
-func TestQualifiedTable(t *testing.T) {
-	t.Parallel()
-
-	require.Equal(t, "public.orders", qualifiedTable("public", "orders"))
 }
 
 func TestSourceTableSelectPrivilegeMessage(t *testing.T) {
@@ -218,18 +215,17 @@ func TestBuildAccessChecks(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		cfg        *stream.Config
-		wantChecks int
-		wantTables []string
-		wantExcl   []string
+		name          string
+		cfg           *stream.Config
+		wantChecks    int
+		wantSelection stream.TableSelection
 	}{
 		{
 			name: "no source postgres url returns no checks",
 			cfg:  &stream.Config{},
 		},
 		{
-			name: "source postgres url returns select privilege check",
+			name: "source postgres url returns select privilege check with unfiltered selection",
 			cfg: &stream.Config{
 				Listener: stream.ListenerConfig{
 					Postgres: &stream.PostgresListenerConfig{URL: "postgres://source"},
@@ -238,23 +234,28 @@ func TestBuildAccessChecks(t *testing.T) {
 			wantChecks: 1,
 		},
 		{
-			name: "snapshot table scope is passed to check",
+			name: "snapshot+filter Include unions through AccessTableSelection",
 			cfg: &stream.Config{
 				Listener: stream.ListenerConfig{
 					Postgres: &stream.PostgresListenerConfig{
 						URL: "postgres://source",
 						Snapshot: &snapshotbuilder.SnapshotListenerConfig{
 							Adapter: adapter.SnapshotConfig{
-								Tables:         []string{"public.orders"},
-								ExcludedTables: []string{"public.audit_log"},
+								Tables: []string{"public.orders"},
 							},
 						},
 					},
 				},
+				Processor: stream.ProcessorConfig{
+					Filter: &filter.Config{
+						IncludeTables: []string{"public.users"},
+					},
+				},
 			},
 			wantChecks: 1,
-			wantTables: []string{"public.orders"},
-			wantExcl:   []string{"public.audit_log"},
+			wantSelection: stream.TableSelection{
+				Include: []string{"public.orders", "public.users"},
+			},
 		},
 	}
 
@@ -272,8 +273,8 @@ func TestBuildAccessChecks(t *testing.T) {
 			require.NotNil(t, cleanup)
 			check, ok := checks[0].(*SourceTableSelectPrivilegesCheck)
 			require.True(t, ok)
-			require.Equal(t, tc.wantTables, check.Tables)
-			require.Equal(t, tc.wantExcl, check.ExcludedTables)
+			require.ElementsMatch(t, tc.wantSelection.Include, check.Selection.Include, "Include lists differ")
+			require.ElementsMatch(t, tc.wantSelection.Exclude, check.Selection.Exclude, "Exclude lists differ")
 		})
 	}
 }
