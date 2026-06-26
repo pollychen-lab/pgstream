@@ -447,8 +447,8 @@ github.com/testcontainers/testcontainers-go/modules/elasticsearch v0.43.0 h1:YvB
 github.com/testcontainers/testcontainers-go/modules/elasticsearch v0.43.0/go.mod h1:bfMgY6Hf0Qadce+fC6SZqtBMC53EWn52o2BWRKoEn4c=
 github.com/testcontainers/testcontainers-go/modules/kafka v0.42.0 h1:b3plW+MUoF6ZaVOAlLjNQMJsigPLsJFIOqHdzMFv/w4=
 github.com/testcontainers/testcontainers-go/modules/kafka v0.42.0/go.mod h1:U0K+PapjOOVJrQCpvRYe6gKk0Oqh+ffl+J80Ln4EKzg=
-github.com/testcontainers/testcontainers-go/modules/opensearch v0.42.0 h1:lXPr5NypYR0O8qcej+JQfsQTOTc3CRv+c4wz3VbBFLI=
-github.com/testcontainers/testcontainers-go/modules/opensearch v0.42.0/go.mod h1:KJ+m9onB785g9VDRDuhvUvsbkRjnFp3Uz+CHoHpPieA=
+github.com/testcontainers/testcontainers-go/modules/opensearch v0.43.0 h1:a1ipjF7d/VxPX1dgVPIk4F+t6YkgMbE2OtBuRQCHJt8=
+github.com/testcontainers/testcontainers-go/modules/opensearch v0.43.0/go.mod h1:OWSeUDiGMUy30iMsAltIJIo9uh/CleLv6KyxjYOsgR8=
 github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0 h1:GCbb1ndrF7OTDiIvxXyItaDab4qkzTFJ48LKFdM7EIo=
 github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0/go.mod h1:IRPBaI8jXdrNfD0e4Zm7Fbcgaz5shKxOQv4axiL09xs=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
