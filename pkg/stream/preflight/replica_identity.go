@@ -52,14 +52,13 @@ ORDER BY n.nspname, c.relname
 `
 
 func (c *ReplicaIdentityCheck) Run(ctx context.Context) ([]Finding, error) {
+	if err := c.Selection.Validate(); err != nil {
+		return nil, fmt.Errorf("parsing table selection: %w", err)
+	}
+
 	conn, err := c.Source(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to source: %w", err)
-	}
-
-	include, exclude, err := buildScopeMaps(c.Selection)
-	if err != nil {
-		return nil, fmt.Errorf("parsing table selection: %w", err)
 	}
 
 	rows, err := conn.Query(ctx, replicaIdentityQuery)
@@ -74,7 +73,7 @@ func (c *ReplicaIdentityCheck) Run(ctx context.Context) ([]Finding, error) {
 		if err := rows.Scan(&t.Schema, &t.Name, &t.Relreplident, &t.HasPK, &t.ReplidentOK); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
-		if !inScope(t.Schema, t.Name, include, exclude) {
+		if !c.Selection.IsTableInScope(t.Schema, t.Name) {
 			continue
 		}
 		if msg := assessReplicaIdentity(t); msg != "" {
@@ -99,6 +98,7 @@ type replicaIdentityRow struct {
 // IDENTITY is insufficient for UPDATE/DELETE replication, or "" if it's OK.
 // Kept pure for cheap unit testing.
 func assessReplicaIdentity(t replicaIdentityRow) string {
+	tbl := postgres.QuoteIdentifier(t.Schema) + "." + postgres.QuoteIdentifier(t.Name)
 	switch t.Relreplident {
 	case "f":
 		return ""
@@ -106,41 +106,15 @@ func assessReplicaIdentity(t replicaIdentityRow) string {
 		if t.HasPK {
 			return ""
 		}
-		return fmt.Sprintf("%s.%s: REPLICA IDENTITY=default but no PRIMARY KEY; UPDATE/DELETE WAL events will be skipped — add a PRIMARY KEY, set REPLICA IDENTITY FULL, or REPLICA IDENTITY USING INDEX <unique non-partial NOT-NULL index>", t.Schema, t.Name)
+		return fmt.Sprintf("%s: REPLICA IDENTITY=default but no PRIMARY KEY; UPDATE/DELETE WAL events will be skipped — add a PRIMARY KEY, set REPLICA IDENTITY FULL, or REPLICA IDENTITY USING INDEX <unique non-partial NOT-NULL index>", tbl)
 	case "n":
-		return fmt.Sprintf("%s.%s: REPLICA IDENTITY=nothing; UPDATE/DELETE WAL events will be skipped — set REPLICA IDENTITY DEFAULT / FULL / USING INDEX", t.Schema, t.Name)
+		return fmt.Sprintf("%s: REPLICA IDENTITY=nothing; UPDATE/DELETE WAL events will be skipped — set REPLICA IDENTITY DEFAULT / FULL / USING INDEX", tbl)
 	case "i":
 		if t.ReplidentOK {
 			return ""
 		}
-		return fmt.Sprintf("%s.%s: REPLICA IDENTITY=index but the chosen index is invalid, non-unique, partial, or includes nullable columns — pick a different index or use REPLICA IDENTITY FULL", t.Schema, t.Name)
+		return fmt.Sprintf("%s: REPLICA IDENTITY=index but the chosen index is invalid, non-unique, partial, or includes nullable columns — pick a different index or use REPLICA IDENTITY FULL", tbl)
 	default:
-		return fmt.Sprintf("%s.%s: unknown REPLICA IDENTITY=%q on this Postgres version", t.Schema, t.Name, t.Relreplident)
+		return fmt.Sprintf("%s: unknown REPLICA IDENTITY=%q on this Postgres version", tbl, t.Relreplident)
 	}
-}
-
-func buildScopeMaps(sel stream.TableSelection) (include, exclude postgres.SchemaTableMap, err error) {
-	if len(sel.Include) > 0 {
-		include, err = postgres.NewSchemaTableMap(sel.Include)
-		if err != nil {
-			return nil, nil, fmt.Errorf("include: %w", err)
-		}
-	}
-	if len(sel.Exclude) > 0 {
-		exclude, err = postgres.NewSchemaTableMap(sel.Exclude)
-		if err != nil {
-			return nil, nil, fmt.Errorf("exclude: %w", err)
-		}
-	}
-	return include, exclude, nil
-}
-
-func inScope(schema, table string, include, exclude postgres.SchemaTableMap) bool {
-	if exclude != nil && exclude.ContainsSchemaTable(schema, table) {
-		return false
-	}
-	if include != nil {
-		return include.ContainsSchemaTable(schema, table)
-	}
-	return true
 }

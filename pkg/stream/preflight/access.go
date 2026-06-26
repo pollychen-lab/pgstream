@@ -11,9 +11,7 @@ import (
 )
 
 // SourceTableSelectPrivilegesCheck verifies that the source Postgres role can
-// read every in-scope table. Inspects only the tables that pass the user's
-// include/exclude filter (TableSelection) so unrelated tables don't pollute
-// the report.
+// read every table pgstream may need to snapshot or replicate.
 type SourceTableSelectPrivilegesCheck struct {
 	Source    postgres.AcquireFunc
 	Selection stream.TableSelection
@@ -38,8 +36,7 @@ ORDER BY n.nspname, c.relname
 `
 
 func (c *SourceTableSelectPrivilegesCheck) Run(ctx context.Context) ([]Finding, error) {
-	include, exclude, err := buildScopeMaps(c.Selection)
-	if err != nil {
+	if err := c.Selection.Validate(); err != nil {
 		return nil, fmt.Errorf("parsing table selection: %w", err)
 	}
 
@@ -60,7 +57,7 @@ func (c *SourceTableSelectPrivilegesCheck) Run(ctx context.Context) ([]Finding, 
 		if err := rows.Scan(&row.Role, &row.Schema, &row.Table, &row.HasSelect); err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
 		}
-		if !inScope(row.Schema, row.Table, include, exclude) {
+		if !c.Selection.IsTableInScope(row.Schema, row.Table) {
 			continue
 		}
 		if !row.HasSelect {
@@ -81,6 +78,7 @@ type sourceTableSelectPrivilegeRow struct {
 }
 
 func sourceTableSelectPrivilegeMessage(row sourceTableSelectPrivilegeRow) string {
-	table := fmt.Sprintf("%s.%s", row.Schema, row.Table)
-	return fmt.Sprintf("source role %q lacks SELECT on %s; run GRANT SELECT ON TABLE %s TO %s", row.Role, table, table, row.Role)
+	table := postgres.QuoteIdentifier(row.Schema) + "." + postgres.QuoteIdentifier(row.Table)
+	role := postgres.QuoteIdentifier(row.Role)
+	return fmt.Sprintf("source role %s lacks SELECT on %s; run GRANT SELECT ON TABLE %s TO %s", role, table, table, role)
 }

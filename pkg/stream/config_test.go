@@ -67,6 +67,90 @@ func TestTableSelection_IsUnfiltered(t *testing.T) {
 	require.False(t, TableSelection{Exclude: []string{"public.x"}}.IsUnfiltered())
 }
 
+func TestTableSelection_IsTableInScope(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		selection TableSelection
+		schema    string
+		table     string
+		want      bool
+	}{
+		{name: "unfiltered selection includes everything", schema: "public", table: "users", want: true},
+		{
+			name:      "include match",
+			selection: TableSelection{Include: []string{"public.users"}},
+			schema:    "public", table: "users", want: true,
+		},
+		{
+			name:      "include miss",
+			selection: TableSelection{Include: []string{"public.users"}},
+			schema:    "public", table: "orders", want: false,
+		},
+		{
+			name:      "exclude match",
+			selection: TableSelection{Exclude: []string{"public.audit_log"}},
+			schema:    "public", table: "audit_log", want: false,
+		},
+		{
+			name:      "exclude miss",
+			selection: TableSelection{Exclude: []string{"public.audit_log"}},
+			schema:    "public", table: "users", want: true,
+		},
+		{
+			name:      "exclude wins over include when both match",
+			selection: TableSelection{Include: []string{"public.users"}, Exclude: []string{"public.users"}},
+			schema:    "public", table: "users", want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, tc.selection.IsTableInScope(tc.schema, tc.table))
+		})
+	}
+}
+
+func TestTableSelection_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		selection TableSelection
+		wantErr   bool
+	}{
+		{name: "empty selection is valid"},
+		{
+			name:      "valid include/exclude",
+			selection: TableSelection{Include: []string{"public.users", "billing.invoices"}, Exclude: []string{"public.audit_log"}},
+		},
+		{
+			name:      "malformed include surfaces error",
+			selection: TableSelection{Include: []string{"too.many.parts"}},
+			wantErr:   true,
+		},
+		{
+			name:      "malformed exclude surfaces error",
+			selection: TableSelection{Exclude: []string{"too.many.parts"}},
+			wantErr:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.selection.Validate()
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestConfig_SnapshotTableSelection(t *testing.T) {
 	t.Parallel()
 

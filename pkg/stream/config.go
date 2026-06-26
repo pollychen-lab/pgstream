@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	pglib "github.com/xataio/pgstream/internal/postgres"
 	"github.com/xataio/pgstream/pkg/backoff"
 	"github.com/xataio/pgstream/pkg/kafka"
 	kafkacheckpoint "github.com/xataio/pgstream/pkg/wal/checkpointer/kafka"
@@ -219,6 +220,45 @@ type TableSelection struct {
 // user table the listener sees is in scope.
 func (s TableSelection) IsUnfiltered() bool {
 	return len(s.Include) == 0 && len(s.Exclude) == 0
+}
+
+// IsTableInScope reports whether the given schema-qualified table satisfies
+// the selection: a table is in scope unless explicitly excluded, and (when
+// Include is non-empty) it must also appear in Include. Wildcard /
+// unqualified-defaults-to-public semantics mirror the WAL filter via
+// internal/postgres.SchemaTableMap.
+//
+// Each call recompiles the underlying lookup maps; for hot loops over many
+// tables, callers should build internal/postgres.SchemaTableMap once outside
+// the loop instead. Malformed entries in Include/Exclude are treated as
+// non-matching — call Validate at config time to surface them up front.
+func (s TableSelection) IsTableInScope(schema, table string) bool {
+	if len(s.Exclude) > 0 {
+		if exclude, err := pglib.NewSchemaTableMap(s.Exclude); err == nil && exclude.ContainsSchemaTable(schema, table) {
+			return false
+		}
+	}
+	if len(s.Include) == 0 {
+		return true
+	}
+	include, err := pglib.NewSchemaTableMap(s.Include)
+	if err != nil {
+		return false
+	}
+	return include.ContainsSchemaTable(schema, table)
+}
+
+// Validate reports whether every Include and Exclude entry parses as
+// [schema.]table. Useful at config-load time so malformed selections fail
+// fast instead of silently dropping tables at IsTableInScope time.
+func (s TableSelection) Validate() error {
+	if _, err := pglib.NewSchemaTableMap(s.Include); err != nil {
+		return fmt.Errorf("include: %w", err)
+	}
+	if _, err := pglib.NewSchemaTableMap(s.Exclude); err != nil {
+		return fmt.Errorf("exclude: %w", err)
+	}
+	return nil
 }
 
 // SnapshotTableSelection returns the table filter that will be applied to the
